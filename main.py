@@ -4,7 +4,8 @@ import os
 import time
 from datetime import datetime
 
-from app import bot, TOKEN, ADMIN_IDS, bot_active, PREMIUM_EMOJIS, all_users
+# Fixed import: use ALL_PREMIUM_EMOJIS instead of PREMIUM_EMOJIS
+from app import bot, TOKEN, ADMIN_IDS, bot_active, ALL_PREMIUM_EMOJIS, all_users
 
 app = Flask(__name__)
 
@@ -44,7 +45,7 @@ def home():
         "bot_id": bot_info['id'],
         "status": "online" if bot_active else "offline",
         "total_users": len(all_users),
-        "emoji_pool": len(PREMIUM_EMOJIS),
+        "emoji_pool": len(ALL_PREMIUM_EMOJIS),  # Fixed here
         "admins": ADMIN_IDS,
         "started_at": bot_start_time.strftime('%Y-%m-%d %H:%M:%S'),
         "uptime": {
@@ -73,6 +74,6 @@ if __name__ == "__main__":
     thread.start()
     print(f"✅ Bot Started at {bot_start_time}")
     print(f"👥 Admins: {ADMIN_IDS}")
-    print(f"📊 Total Emojis: {len(PREMIUM_EMOJIS)}")
+    print(f"📊 Total Emojis: {len(ALL_PREMIUM_EMOJIS)}")  # Fixed here
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
