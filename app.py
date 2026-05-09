@@ -184,13 +184,30 @@ temp_data = {}
 # ============================================================
 # EMOJI CONVERSION FUNCTION (SMART MAPPING)
 # ============================================================
+# emoji_char -> (premium_id, timestamp)
+# Refreshes every EMOJI_CACHE_TTL seconds so icons rotate periodically
+# but stay stable within that window (no mid-render randomising)
+_emoji_id_cache: dict = {}
+EMOJI_CACHE_TTL = 1800  # 30 minutes — change to taste (e.g. 3600 = 1 hour)
+
 def get_premium_emoji_for_normal_emoji(normal_emoji: str) -> str:
-    """Returns a related premium emoji ID for a normal emoji"""
+    """
+    Returns a premium emoji ID for a given normal emoji.
+    Stable within EMOJI_CACHE_TTL seconds, then picks a fresh one.
+    Gives visual variety over time without mid-session randomising.
+    """
+    now = time.time()
+    cached = _emoji_id_cache.get(normal_emoji)
+    if cached and (now - cached[1]) < EMOJI_CACHE_TTL:
+        return cached[0]
     if normal_emoji in EMOJI_MAPPING:
-        return random.choice(EMOJI_MAPPING[normal_emoji])
-    if normal_emoji in FLAG_MAPPING:
-        return FLAG_MAPPING[normal_emoji]
-    return random.choice(ALL_PREMIUM_EMOJIS)
+        chosen = random.choice(EMOJI_MAPPING[normal_emoji])
+    elif normal_emoji in FLAG_MAPPING:
+        chosen = FLAG_MAPPING[normal_emoji]
+    else:
+        chosen = random.choice(ALL_PREMIUM_EMOJIS)
+    _emoji_id_cache[normal_emoji] = (chosen, now)
+    return chosen
 
 def get_random_primary_emoji() -> str:
     return random.choice(PRIMARY_EMOJIS)
@@ -262,33 +279,29 @@ def _make_btn(text: str, style: str = None, icon_id: str = None, **kwargs) -> In
 def make_button(text: str, style: str = None, **kwargs) -> InlineKeyboardButton:
     """
     Create an inline button for user's custom buttons.
-    - If button name contains an emoji, strips it from the label and converts
-      it to a related animated premium emoji shown as the button icon.
+    - If button name contains an emoji, maps it to a related premium emoji icon.
+    - Original text is ALWAYS kept intact (emoji stays in label).
     - Applies button color (style) safely.
-    Example: "join 🔥" → text="join", icon=premium🔥 (animated)
     """
-    first_emoji, cleaned_text = _extract_first_emoji(text)
+    first_emoji, _ = _extract_first_emoji(text)
     if first_emoji:
         premium_id = get_premium_emoji_for_normal_emoji(first_emoji)
-        # Use cleaned text (emoji stripped) + premium icon
-        display = cleaned_text if cleaned_text else text
-        return _make_btn(display, style=style, icon_id=premium_id, **kwargs)
+        return _make_btn(text, style=style, icon_id=premium_id, **kwargs)
     return _make_btn(text, style=style, **kwargs)
 
 def make_button_with_icon(text: str, style: str = None, **kwargs) -> InlineKeyboardButton:
     """
     Create an inline button WITH a premium emoji icon (for bot's own buttons).
-    - If text contains an emoji, uses a related premium emoji instead of random.
-    - Strips the emoji from the label to avoid duplication.
+    - If text contains an emoji, uses a related premium emoji icon.
+    - If no emoji in text, uses a random primary premium emoji icon.
+    - Original text is ALWAYS kept intact — no stripping.
     """
-    first_emoji, cleaned_text = _extract_first_emoji(text)
+    first_emoji, _ = _extract_first_emoji(text)
     if first_emoji:
         premium_id = get_premium_emoji_for_normal_emoji(first_emoji)
-        display = cleaned_text if cleaned_text else text
     else:
         premium_id = get_random_primary_emoji()
-        display = text
-    return _make_btn(display, style=style, icon_id=premium_id, **kwargs)
+    return _make_btn(text, style=style, icon_id=premium_id, **kwargs)
 
 def make_styled_row(buttons_config: list) -> list:
     """Create a row of styled buttons with premium emoji icons (for bot's own buttons)"""
@@ -651,6 +664,7 @@ def start_post(message):
         "media_id": None,
         "media_name": None,
         "buttons": [],
+            "refresh_count": 0,
         "button_count": 0,
         "current_button": 0,
         "processed_text": "",
@@ -1025,12 +1039,20 @@ def create_preview(chat_id, uid):
         return
     
     # Action buttons for bot (with premium emoji icons)
+    MAX_REFRESHES = 5
+    refresh_count = data.get("refresh_count", 0)
+    refreshes_left = MAX_REFRESHES - refresh_count
+    refresh_label = f"🔄 𝐑𝐄𝐅𝐑𝐄𝐒𝐇 ({refreshes_left}/{MAX_REFRESHES})"
+
     action_keyboard = [
         make_styled_row([
-            {"text": "🔄 𝐑𝐄𝐅𝐑𝐄𝐒𝐇", "style": "primary", "callback_data": f"refresh_{uid}"},
+            {"text": refresh_label, "style": "primary", "callback_data": f"refresh_{uid}"},
             {"text": "🗑️ 𝐃𝐄𝐋𝐄𝐓𝐄", "style": "danger", "callback_data": f"delete_{uid}"},
         ]),
-        [make_button_with_icon(text="✅ 𝐃𝐎𝐍𝐄", style="success", callback_data=f"done_{uid}")],
+        make_styled_row([
+            {"text": "✅ 𝐃𝐎𝐍𝐄", "style": "success", "callback_data": f"done_{uid}"},
+            {"text": "📤 𝐅𝐎𝐑𝐖𝐀𝐑𝐃", "style": "primary", "callback_data": f"forward_{uid}"},
+        ]),
     ]
     action_markup = InlineKeyboardMarkup(action_keyboard)
     
@@ -1039,9 +1061,10 @@ def create_preview(chat_id, uid):
 
 𝐘𝐨𝐮𝐫 𝐩𝐨𝐬𝐭 𝐢𝐬 𝐫𝐞𝐚𝐝𝐲!
 
-{PLACEHOLDER} 𝐑𝐄𝐅𝐑𝐄𝐒𝐇 - 𝐍𝐞𝐰 𝐞𝐦𝐨𝐣𝐢𝐬
+{PLACEHOLDER} 𝐑𝐄𝐅𝐑𝐄𝐒𝐇 - 𝐍𝐞𝐰 𝐞𝐦𝐨𝐣𝐢𝐬 ({refreshes_left} 𝐥𝐞𝐟𝐭)
 {PLACEHOLDER} 𝐃𝐄𝐋𝐄𝐓𝐄 - 𝐑𝐞𝐦𝐨𝐯𝐞 𝐩𝐫𝐞𝐯𝐢𝐞𝐰
 {PLACEHOLDER} 𝐃𝐎𝐍𝐄 - 𝐅𝐢𝐧𝐢𝐬𝐡
+{PLACEHOLDER} 𝐅𝐎𝐑𝐖𝐀𝐑𝐃 - 𝐁𝐫𝐨𝐚𝐝𝐜𝐚𝐬𝐭 𝐰𝐢𝐭𝐡 𝐛𝐮𝐭𝐭𝐨𝐧𝐬
 
 {PLACEHOLDER}═════════════════════{PLACEHOLDER}
 """
@@ -1051,21 +1074,28 @@ def create_preview(chat_id, uid):
     data["action_msg_id"] = action_msg.message_id
     temp_data[uid] = data
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith(("refresh_", "delete_", "done_")))
+@bot.callback_query_handler(func=lambda c: c.data.startswith(("refresh_", "delete_", "done_", "forward_")))
 def handle_preview_actions(call):
     parts = call.data.split("_")
     action = parts[0]
     uid = int(parts[1]) if len(parts) > 1 else call.from_user.id
     chat_id = call.message.chat.id
-    
+
     if uid not in temp_data:
         bot.answer_callback_query(call.id, "Session expired!")
         return
-    
+
     data = temp_data[uid]
-    
+
     if action == "refresh":
-        bot.answer_callback_query(call.id, "Refreshing emojis...")
+        MAX_REFRESHES = 5
+        refresh_count = data.get("refresh_count", 0)
+        if refresh_count >= MAX_REFRESHES:
+            bot.answer_callback_query(call.id, "⛔ Refresh limit reached! (5/5)
+Make a new post to refresh again.", show_alert=True)
+            return
+        data["refresh_count"] = refresh_count + 1
+        bot.answer_callback_query(call.id, f"🔄 Refreshing... ({data['refresh_count']}/{MAX_REFRESHES} used)")
         if data.get("preview_msg_id"):
             try: bot.delete_message(chat_id, data["preview_msg_id"])
             except: pass
@@ -1076,7 +1106,7 @@ def handle_preview_actions(call):
         data["processed_text"] = processed_text
         data["processed_entities"] = processed_entities
         create_preview(chat_id, uid)
-        
+
     elif action == "delete":
         bot.answer_callback_query(call.id, "Deleted!")
         if data.get("preview_msg_id"):
@@ -1086,7 +1116,7 @@ def handle_preview_actions(call):
             try: bot.delete_message(chat_id, data["action_msg_id"])
             except: pass
         temp_data.pop(uid, None)
-        
+
     elif action == "done":
         bot.answer_callback_query(call.id, "Post created!")
         if data.get("action_msg_id"):
@@ -1104,6 +1134,68 @@ def handle_preview_actions(call):
 {PLACEHOLDER}═════════════════════{PLACEHOLDER}
 """
         _send_pe(chat_id, text, reply_markup=kb)
+
+    elif action == "forward":
+        # Broadcast the preview message (with its inline buttons) to all users
+        preview_msg_id = data.get("preview_msg_id")
+        if not preview_msg_id:
+            bot.answer_callback_query(call.id, "No preview to forward!", show_alert=True)
+            return
+        bot.answer_callback_query(call.id, "📤 Broadcasting with buttons...")
+
+        # Build the user's custom inline keyboard (same as in create_preview)
+        reply_markup = None
+        if data.get("buttons"):
+            keyboard = []
+            for btn in data["buttons"]:
+                style = btn.get("color")
+                keyboard.append([make_button(text=btn["name"], style=style, url=btn["url"])])
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+        success = 0
+        failed = 0
+        total = len(all_users)
+
+        status_text = f"{PLACEHOLDER} 📢 𝐁𝐫𝐨𝐚𝐝𝐜𝐚𝐬𝐭𝐢𝐧𝐠 𝐭𝐨 {total} 𝐮𝐬𝐞𝐫𝐬..."
+        status_msg = bot.send_message(chat_id, status_text)
+
+        processed_text = data.get("processed_text", "")
+        processed_entities = data.get("processed_entities", [])
+        media_type = data.get("media_type")
+        media_id = data.get("media_id")
+
+        for target_uid in list(all_users):
+            try:
+                if media_type == "image" and media_id:
+                    bot.send_photo(target_uid, media_id, caption=processed_text or None,
+                                   caption_entities=processed_entities or None, reply_markup=reply_markup)
+                elif media_type == "video" and media_id:
+                    bot.send_video(target_uid, media_id, caption=processed_text or None,
+                                   caption_entities=processed_entities or None, reply_markup=reply_markup)
+                elif media_type == "doc" and media_id:
+                    bot.send_document(target_uid, media_id, caption=processed_text or None,
+                                      caption_entities=processed_entities or None, reply_markup=reply_markup)
+                else:
+                    bot.send_message(target_uid, processed_text if processed_text else f"{PLACEHOLDER} 𝐏𝐨𝐬𝐭",
+                                     entities=processed_entities or None, reply_markup=reply_markup, parse_mode=None)
+                success += 1
+                time.sleep(0.05)
+            except Exception:
+                failed += 1
+
+        try: bot.delete_message(chat_id, status_msg.message_id)
+        except: pass
+
+        result_text = f"""
+{PLACEHOLDER}═══《 ✅ 𝐁𝐑𝐎𝐀𝐃𝐂𝐀𝐒𝐓 𝐃𝐎𝐍𝐄! 》═══{PLACEHOLDER}
+
+𝐒𝐔𝐂𝐂𝐄𝐒𝐒: {success} ✅
+𝐅𝐀𝐈𝐋𝐄𝐃: {failed} ❌
+𝐁𝐔𝐓𝐓𝐎𝐍𝐒: 𝐈𝐍𝐂𝐋𝐔𝐃𝐄𝐃 ✅
+
+{PLACEHOLDER}═════════════════════{PLACEHOLDER}
+"""
+        _send_pe(chat_id, result_text, reply_markup=get_menu(uid))
 
 @bot.callback_query_handler(func=lambda c: c.data == "check_join")
 def handle_check_join(call):
