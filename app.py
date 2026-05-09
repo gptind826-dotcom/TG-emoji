@@ -190,20 +190,33 @@ temp_data = {}
 _emoji_id_cache: dict = {}
 EMOJI_CACHE_TTL = 1800  # 30 minutes — change to taste (e.g. 3600 = 1 hour)
 
+def _normalize_emoji(e: str) -> str:
+    """
+    Strip variation selectors (U+FE0F, U+FE0E) and zero-width joiners
+    so that e.g. '🔥\ufe0f' matches the plain '🔥' key in EMOJI_MAPPING.
+    Also tries the base codepoint alone for ZWJ sequences.
+    """
+    normalized = e.replace('\ufe0f', '').replace('\ufe0e', '').replace('\u200d', '')
+    return normalized if normalized else e
+
 def get_premium_emoji_for_normal_emoji(normal_emoji: str) -> str:
     """
     Returns a premium emoji ID for a given normal emoji.
     Stable within EMOJI_CACHE_TTL seconds, then picks a fresh one.
-    Gives visual variety over time without mid-session randomising.
+    Normalizes variation selectors so '🔥\ufe0f' correctly maps to '🔥'.
     """
     now = time.time()
     cached = _emoji_id_cache.get(normal_emoji)
     if cached and (now - cached[1]) < EMOJI_CACHE_TTL:
         return cached[0]
-    if normal_emoji in EMOJI_MAPPING:
-        chosen = random.choice(EMOJI_MAPPING[normal_emoji])
-    elif normal_emoji in FLAG_MAPPING:
-        chosen = FLAG_MAPPING[normal_emoji]
+    # Try exact match first, then normalized (strips \ufe0f etc.)
+    key = normal_emoji
+    if key not in EMOJI_MAPPING and key not in FLAG_MAPPING:
+        key = _normalize_emoji(normal_emoji)
+    if key in EMOJI_MAPPING:
+        chosen = random.choice(EMOJI_MAPPING[key])
+    elif key in FLAG_MAPPING:
+        chosen = FLAG_MAPPING[key]
     else:
         chosen = random.choice(ALL_PREMIUM_EMOJIS)
     _emoji_id_cache[normal_emoji] = (chosen, now)
@@ -1039,14 +1052,9 @@ def create_preview(chat_id, uid):
         return
     
     # Action buttons for bot (with premium emoji icons)
-    MAX_REFRESHES = 5
-    refresh_count = data.get("refresh_count", 0)
-    refreshes_left = MAX_REFRESHES - refresh_count
-    refresh_label = f"🔄 𝐑𝐄𝐅𝐑𝐄𝐒𝐇 ({refreshes_left}/{MAX_REFRESHES})"
-
     action_keyboard = [
         make_styled_row([
-            {"text": refresh_label, "style": "primary", "callback_data": f"refresh_{uid}"},
+            {"text": "🔄 𝐑𝐄𝐅𝐑𝐄𝐒𝐇", "style": "primary", "callback_data": f"refresh_{uid}"},
             {"text": "🗑️ 𝐃𝐄𝐋𝐄𝐓𝐄", "style": "danger", "callback_data": f"delete_{uid}"},
         ]),
         make_styled_row([
@@ -1061,7 +1069,7 @@ def create_preview(chat_id, uid):
 
 𝐘𝐨𝐮𝐫 𝐩𝐨𝐬𝐭 𝐢𝐬 𝐫𝐞𝐚𝐝𝐲!
 
-{PLACEHOLDER} 𝐑𝐄𝐅𝐑𝐄𝐒𝐇 - 𝐍𝐞𝐰 𝐞𝐦𝐨𝐣𝐢𝐬 ({refreshes_left} 𝐥𝐞𝐟𝐭)
+{PLACEHOLDER} 𝐑𝐄𝐅𝐑𝐄𝐒𝐇 - 𝐍𝐞𝐰 𝐞𝐦𝐨𝐣𝐢𝐬
 {PLACEHOLDER} 𝐃𝐄𝐋𝐄𝐓𝐄 - 𝐑𝐞𝐦𝐨𝐯𝐞 𝐩𝐫𝐞𝐯𝐢𝐞𝐰
 {PLACEHOLDER} 𝐃𝐎𝐍𝐄 - 𝐅𝐢𝐧𝐢𝐬𝐡
 {PLACEHOLDER} 𝐅𝐎𝐑𝐖𝐀𝐑𝐃 - 𝐁𝐫𝐨𝐚𝐝𝐜𝐚𝐬𝐭 𝐰𝐢𝐭𝐡 𝐛𝐮𝐭𝐭𝐨𝐧𝐬
@@ -1088,14 +1096,7 @@ def handle_preview_actions(call):
     data = temp_data[uid]
 
     if action == "refresh":
-        MAX_REFRESHES = 5
-        refresh_count = data.get("refresh_count", 0)
-        if refresh_count >= MAX_REFRESHES:
-            bot.answer_callback_query(call.id, "⛔ Refresh limit reached! (5/5)
-Make a new post to refresh again.", show_alert=True)
-            return
-        data["refresh_count"] = refresh_count + 1
-        bot.answer_callback_query(call.id, f"🔄 Refreshing... ({data['refresh_count']}/{MAX_REFRESHES} used)")
+        bot.answer_callback_query(call.id, "🔄 Refreshing emojis...")
         if data.get("preview_msg_id"):
             try: bot.delete_message(chat_id, data["preview_msg_id"])
             except: pass
