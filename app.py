@@ -11,7 +11,7 @@ from datetime import datetime
 # ============================================================
 # Bot Credentials
 # ============================================================
-TOKEN = "8755556617:AAFl6rHJOywVy0S6kJ3FRHwTAyzN0sBxX1k"
+TOKEN = "8689726439:AAEQSU1DlHBH9O6FpYmsKDqBA3_SgXrvCyU"
 ADMIN_IDS = [8379062893, 6907359862]
 bot = telebot.TeleBot(TOKEN)
 
@@ -184,32 +184,18 @@ temp_data = {}
 # ============================================================
 # EMOJI CONVERSION FUNCTION (SMART MAPPING)
 # ============================================================
-# emoji_char -> (premium_id, timestamp)
-# Refreshes every EMOJI_CACHE_TTL seconds so icons rotate periodically
-# but stay stable within that window (no mid-render randomising)
 _emoji_id_cache: dict = {}
-EMOJI_CACHE_TTL = 1800  # 30 minutes — change to taste (e.g. 3600 = 1 hour)
+EMOJI_CACHE_TTL = 1800
 
 def _normalize_emoji(e: str) -> str:
-    """
-    Strip variation selectors (U+FE0F, U+FE0E) and zero-width joiners
-    so that e.g. '🔥\ufe0f' matches the plain '🔥' key in EMOJI_MAPPING.
-    Also tries the base codepoint alone for ZWJ sequences.
-    """
     normalized = e.replace('\ufe0f', '').replace('\ufe0e', '').replace('\u200d', '')
     return normalized if normalized else e
 
 def get_premium_emoji_for_normal_emoji(normal_emoji: str) -> str:
-    """
-    Returns a premium emoji ID for a given normal emoji.
-    Stable within EMOJI_CACHE_TTL seconds, then picks a fresh one.
-    Normalizes variation selectors so '🔥\ufe0f' correctly maps to '🔥'.
-    """
     now = time.time()
     cached = _emoji_id_cache.get(normal_emoji)
     if cached and (now - cached[1]) < EMOJI_CACHE_TTL:
         return cached[0]
-    # Try exact match first, then normalized (strips \ufe0f etc.)
     key = normal_emoji
     if key not in EMOJI_MAPPING and key not in FLAG_MAPPING:
         key = _normalize_emoji(normal_emoji)
@@ -226,21 +212,15 @@ def get_random_primary_emoji() -> str:
     return random.choice(PRIMARY_EMOJIS)
 
 # ============================================================
-# BUTTON CREATION - SMART EMOJI DETECTION & PREMIUM CONVERSION
+# BUTTON CREATION
 # ============================================================
 
 def _extract_first_emoji(text: str):
-    """
-    Scan text for the first emoji (including flags, ZWJ sequences, skin tones).
-    Returns (emoji_sequence, cleaned_text_without_that_emoji).
-    If no emoji found, returns (None, original_text).
-    """
     import unicodedata
     chars = list(text)
     i = 0
     while i < len(chars):
         ch = chars[i]
-        # Flag sequences: two regional indicator letters side by side
         if (i + 1 < len(chars)
                 and '\U0001F1E0' <= ch <= '\U0001F1FF'
                 and '\U0001F1E0' <= chars[i + 1] <= '\U0001F1FF'):
@@ -248,7 +228,6 @@ def _extract_first_emoji(text: str):
             cleaned = "".join(chars[:i] + chars[i + 2:]).strip()
             return seq, cleaned
         if emoji.is_emoji(ch):
-            # Greedily consume ZWJ, variation selectors, combiners, skin tones
             seq = ch
             j = i + 1
             while j < len(chars) and (
@@ -264,51 +243,29 @@ def _extract_first_emoji(text: str):
     return None, text
 
 def _make_btn(text: str, style: str = None, icon_id: str = None, **kwargs) -> InlineKeyboardButton:
-    """
-    Safely build InlineKeyboardButton, trying icon_custom_emoji_id and style
-    gracefully — falls back if the installed telebot version doesn't support them.
-    """
-    # Try full params first (icon + style)
     if icon_id and style:
         try:
             return InlineKeyboardButton(text=text, icon_custom_emoji_id=icon_id, style=style, **kwargs)
         except TypeError:
             pass
-    # Try icon only
     if icon_id:
         try:
             return InlineKeyboardButton(text=text, icon_custom_emoji_id=icon_id, **kwargs)
         except TypeError:
             pass
-    # Try style only
     if style:
         try:
             return InlineKeyboardButton(text=text, style=style, **kwargs)
         except TypeError:
             pass
-    # Plain fallback
     return InlineKeyboardButton(text=text, **kwargs)
 
 def make_button(text: str, style: str = None, **kwargs) -> InlineKeyboardButton:
-    """
-    Create an inline button for user's custom buttons.
-    - If button name contains an emoji, maps it to a related premium emoji icon.
-    - Original text is ALWAYS kept intact (emoji stays in label).
-    - Applies button color (style) safely.
-    """
-    first_emoji, _ = _extract_first_emoji(text)
-    if first_emoji:
-        premium_id = get_premium_emoji_for_normal_emoji(first_emoji)
-        return _make_btn(text, style=style, icon_id=premium_id, **kwargs)
+    """Create button for user's custom buttons - NO auto emoji conversion"""
     return _make_btn(text, style=style, **kwargs)
 
 def make_button_with_icon(text: str, style: str = None, **kwargs) -> InlineKeyboardButton:
-    """
-    Create an inline button WITH a premium emoji icon (for bot's own buttons).
-    - If text contains an emoji, uses a related premium emoji icon.
-    - If no emoji in text, uses a random primary premium emoji icon.
-    - Original text is ALWAYS kept intact — no stripping.
-    """
+    """Create button WITH premium emoji icon for bot's own buttons"""
     first_emoji, _ = _extract_first_emoji(text)
     if first_emoji:
         premium_id = get_premium_emoji_for_normal_emoji(first_emoji)
@@ -317,7 +274,6 @@ def make_button_with_icon(text: str, style: str = None, **kwargs) -> InlineKeybo
     return _make_btn(text, style=style, icon_id=premium_id, **kwargs)
 
 def make_styled_row(buttons_config: list) -> list:
-    """Create a row of styled buttons with premium emoji icons (for bot's own buttons)"""
     row = []
     for cfg in buttons_config:
         cfg_copy = cfg.copy()
@@ -374,10 +330,6 @@ def _send_pe_return(chat_id, text: str, use_primary: bool = True, reply_markup=N
     return bot.send_message(chat_id, text, entities=entities, reply_markup=reply_markup, parse_mode=None)
 
 def process_text_and_entities(text: str, original_entities: list):
-    """
-    Convert normal emojis to premium emojis using smart mapping.
-    Flags like 🇧🇩 will be converted to premium flag emojis.
-    """
     final_text = ""
     new_entities = []
     offset_map = {}
@@ -485,37 +437,37 @@ def register_user(uid: int):
         save_users(all_users)
 
 # ============================================================
-# MAIN MENU - BOLD TEXT ONLY, NO CUSTOM EMOJI ICONS
+# MAIN MENU - WITH EMOJI BUTTONS
 # ============================================================
 def get_menu(user_id):
-    """Returns keyboard menu with BOLD text only - NO premium emoji icons"""
+    """Returns keyboard menu with emoji buttons"""
     is_admin_user = is_admin(user_id)
     markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     
     if is_admin_user:
         markup.row(
-            KeyboardButton("𝐁𝐎𝐓 𝐎𝐅𝐅"),
-            KeyboardButton("𝐁𝐎𝐓 𝐎𝐍")
+            KeyboardButton("🔴 𝐁𝐎𝐓 𝐎𝐅𝐅"),
+            KeyboardButton("🟢 𝐁𝐎𝐓 𝐎𝐍")
         )
         markup.row(
-            KeyboardButton("𝐌𝐀𝐊𝐄 𝐏𝐎𝐒𝐓"),
-            KeyboardButton("𝐁𝐑𝐎𝐀𝐃𝐂𝐀𝐒𝐓")
+            KeyboardButton("🌿 𝐌𝐀𝐊𝐄 𝐏𝐎𝐒𝐓"),
+            KeyboardButton("💢 𝐁𝐑𝐎𝐀𝐃𝐂𝐀𝐒𝐓")
         )
         markup.row(
-            KeyboardButton("𝐔𝐒𝐄𝐑𝐒 𝐋𝐈𝐒𝐓"),
-            KeyboardButton("𝐁𝐎𝐓 𝐒𝐓𝐀𝐓𝐒")
+            KeyboardButton("👾 𝐔𝐒𝐄𝐑𝐒 𝐋𝐈𝐒𝐓"),
+            KeyboardButton("🍁 𝐁𝐎𝐓 𝐒𝐓𝐀𝐓𝐒")
         )
         markup.row(
-            KeyboardButton("𝐇𝐄𝐋𝐏"),
-            KeyboardButton("𝐀𝐁𝐎𝐔𝐓 𝐁𝐎𝐓")
+            KeyboardButton("🍂 𝐇𝐄𝐋𝐏"),
+            KeyboardButton("🍀 𝐀𝐁𝐎𝐔𝐓 𝐁𝐎𝐓")
         )
     else:
-        markup.row(KeyboardButton("𝐌𝐀𝐊𝐄 𝐏𝐎𝐒𝐓"))
+        markup.row(KeyboardButton("🌿 𝐌𝐀𝐊𝐄 𝐏𝐎𝐒𝐓"))
         markup.row(
-            KeyboardButton("𝐇𝐄𝐋𝐏"),
-            KeyboardButton("𝐀𝐁𝐎𝐔𝐓 𝐁𝐎𝐓")
+            KeyboardButton("🍂 𝐇𝐄𝐋𝐏"),
+            KeyboardButton("🍀 𝐀𝐁𝐎𝐔𝐓 𝐁𝐎𝐓")
         )
-        markup.row(KeyboardButton("𝐒𝐓𝐀𝐓𝐒"))
+        markup.row(KeyboardButton("🪾 𝐒𝐓𝐀𝐓𝐒"))
     
     return markup
 
@@ -556,8 +508,24 @@ def send_welcome_message(user_name: str, user_id: int):
 """
     return text
 
+# Helper function to match button text with or without emoji prefix
+def button_matches(text: str, *targets) -> bool:
+    """Check if button text matches any target, ignoring emoji prefix"""
+    if not text:
+        return False
+    # Strip any emoji prefix (like 🌿, 🔴, 🟢, etc.)
+    cleaned = text.strip()
+    # Remove first emoji if present
+    first_char = cleaned[0] if cleaned else ""
+    if emoji.is_emoji(first_char):
+        cleaned = cleaned[1:].strip()
+    for target in targets:
+        if cleaned == target or text == target:
+            return True
+    return False
+
 # ============================================================
-# BOT COMMAND HANDLERS
+# BOT COMMAND HANDLERS - UPDATED WITH EMOJI SUPPORT
 # ============================================================
 
 @bot.message_handler(commands=["start"])
@@ -588,7 +556,7 @@ def welcome(message):
     text = send_welcome_message(name, uid)
     _send_pe(message.chat.id, text, reply_markup=kb)
 
-@bot.message_handler(func=lambda m: m.text == "𝐇𝐄𝐋𝐏")
+@bot.message_handler(func=lambda m: button_matches(m.text, "𝐇𝐄𝐋𝐏"))
 def help_msg(message):
     uid = message.from_user.id
     kb = get_menu(uid)
@@ -616,7 +584,7 @@ def help_msg(message):
 """
     _send_pe(message.chat.id, text, reply_markup=kb)
 
-@bot.message_handler(func=lambda m: m.text == "𝐀𝐁𝐎𝐔𝐓 𝐁𝐎𝐓")
+@bot.message_handler(func=lambda m: button_matches(m.text, "𝐀𝐁𝐎𝐔𝐓 𝐁𝐎𝐓"))
 def about_bot(message):
     uid = message.from_user.id
     kb = get_menu(uid)
@@ -638,7 +606,7 @@ def about_bot(message):
 """
     _send_pe(message.chat.id, text, reply_markup=kb)
 
-@bot.message_handler(func=lambda m: m.text == "𝐒𝐓𝐀𝐓𝐒")
+@bot.message_handler(func=lambda m: button_matches(m.text, "𝐒𝐓𝐀𝐓𝐒", "𝐁𝐎𝐓 𝐒𝐓𝐀𝐓𝐒"))
 def stats_msg(message):
     uid = message.from_user.id
     kb = get_menu(uid)
@@ -660,7 +628,7 @@ def stats_msg(message):
 # ============================================================
 # MAKE POST HANDLERS
 # ============================================================
-@bot.message_handler(func=lambda m: m.text == "𝐌𝐀𝐊𝐄 𝐏𝐎𝐒𝐓")
+@bot.message_handler(func=lambda m: button_matches(m.text, "𝐌𝐀𝐊𝐄 𝐏𝐎𝐒𝐓"))
 def start_post(message):
     uid = message.from_user.id
     register_user(uid)
@@ -677,7 +645,7 @@ def start_post(message):
         "media_id": None,
         "media_name": None,
         "buttons": [],
-            "refresh_count": 0,
+        "refresh_count": 0,
         "button_count": 0,
         "current_button": 0,
         "processed_text": "",
@@ -727,12 +695,12 @@ def ask_media_type(chat_id: int, uid: int):
 """
     keyboard = [
         make_styled_row([
-            {"text": "🎬 𝐕𝐈𝐃𝐄𝐎", "style": "primary", "callback_data": f"media_video_{uid}"},
-            {"text": "🖼️ 𝐈𝐌𝐀𝐆𝐄", "style": "primary", "callback_data": f"media_image_{uid}"},
+            {"text": "𝐕𝐈𝐃𝐄𝐎", "style": "primary", "callback_data": f"media_video_{uid}"},
+            {"text": "𝐈𝐌𝐀𝐆𝐄", "style": "primary", "callback_data": f"media_image_{uid}"},
         ]),
         make_styled_row([
-            {"text": "📄 𝐃𝐎𝐂𝐔𝐌𝐄𝐍𝐓", "style": "primary", "callback_data": f"media_doc_{uid}"},
-            {"text": "⏭️ 𝐒𝐊𝐈𝐏", "style": "danger", "callback_data": f"media_skip_{uid}"},
+            {"text": "𝐃𝐎𝐂𝐔𝐌𝐄𝐍𝐓", "style": "primary", "callback_data": f"media_doc_{uid}"},
+            {"text": "𝐒𝐊𝐈𝐏", "style": "danger", "callback_data": f"media_skip_{uid}"},
         ]),
     ]
     markup = InlineKeyboardMarkup(keyboard)
@@ -823,14 +791,14 @@ def ask_button_amount(chat_id: int, uid: int):
 """
     keyboard = [
         make_styled_row([
-            {"text": "1️⃣ 𝐎𝐍𝐄", "callback_data": f"btn_amt_1_{uid}"},
-            {"text": "2️⃣ 𝐓𝐖𝐎", "callback_data": f"btn_amt_2_{uid}"},
+            {"text": "𝟏", "callback_data": f"btn_amt_1_{uid}"},
+            {"text": "𝟐", "callback_data": f"btn_amt_2_{uid}"},
         ]),
         make_styled_row([
-            {"text": "3️⃣ 𝐓𝐇𝐑𝐄𝐄", "callback_data": f"btn_amt_3_{uid}"},
-            {"text": "4️⃣ 𝐅𝐎𝐔𝐑", "callback_data": f"btn_amt_4_{uid}"},
+            {"text": "𝟑", "callback_data": f"btn_amt_3_{uid}"},
+            {"text": "𝟒", "callback_data": f"btn_amt_4_{uid}"},
         ]),
-        [make_button_with_icon(text="🚫 𝐍𝐎 𝐁𝐔𝐓𝐓𝐎𝐍𝐒", style="danger", callback_data=f"btn_amt_0_{uid}")],
+        [make_button_with_icon(text="𝐍𝐎 𝐁𝐔𝐓𝐓𝐎𝐍𝐒", style="danger", callback_data=f"btn_amt_0_{uid}")],
     ]
     markup = InlineKeyboardMarkup(keyboard)
     _send_pe(chat_id, text, reply_markup=markup)
@@ -963,10 +931,10 @@ def ask_button_color(chat_id, uid):
 
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        make_button_with_icon(text="🔵 𝐏𝐑𝐈𝐌𝐀𝐑𝐘", style="primary", callback_data=f"btn_color_primary_{uid}"),
-        make_button_with_icon(text="🔴 𝐃𝐀𝐍𝐆𝐄𝐑", style="danger", callback_data=f"btn_color_danger_{uid}"),
-        make_button_with_icon(text="🟢 𝐒𝐔𝐂𝐂𝐄𝐒𝐒", style="success", callback_data=f"btn_color_success_{uid}"),
-        make_button_with_icon(text="⚪ 𝐃𝐄𝐅𝐀𝐔𝐋𝐓", callback_data=f"btn_color_default_{uid}"),
+        make_button_with_icon(text="𝐏𝐑𝐈𝐌𝐀𝐑𝐘", style="primary", callback_data=f"btn_color_primary_{uid}"),
+        make_button_with_icon(text="𝐃𝐀𝐍𝐆𝐄𝐑", style="danger", callback_data=f"btn_color_danger_{uid}"),
+        make_button_with_icon(text="𝐒𝐔𝐂𝐂𝐄𝐒𝐒", style="success", callback_data=f"btn_color_success_{uid}"),
+        make_button_with_icon(text="𝐃𝐄𝐅𝐀𝐔𝐋𝐓", callback_data=f"btn_color_default_{uid}"),
     )
     
     _send_pe(chat_id, text, reply_markup=markup)
@@ -1020,14 +988,11 @@ def create_preview(chat_id, uid):
     data["processed_text"] = processed_text
     data["processed_entities"] = processed_entities
     
-    # Build user's custom buttons - NO AUTO EMOJI ADDED
-    # Only use what user typed as button name
     reply_markup = None
     if data["buttons"]:
         keyboard = []
         for btn in data["buttons"]:
             style = btn.get("color")
-            # Use make_button (NO auto emoji) for user's custom buttons
             keyboard.append([make_button(
                 text=btn["name"],
                 style=style,
@@ -1051,15 +1016,14 @@ def create_preview(chat_id, uid):
         _send_pe(chat_id, f"{PLACEHOLDER} ❌ 𝐄𝐫𝐫𝐨𝐫: {e}")
         return
     
-    # Action buttons for bot (with premium emoji icons)
     action_keyboard = [
         make_styled_row([
-            {"text": "🔄 𝐑𝐄𝐅𝐑𝐄𝐒𝐇", "style": "primary", "callback_data": f"refresh_{uid}"},
-            {"text": "🗑️ 𝐃𝐄𝐋𝐄𝐓𝐄", "style": "danger", "callback_data": f"delete_{uid}"},
+            {"text": "𝐑𝐄𝐅𝐑𝐄𝐒𝐇", "style": "primary", "callback_data": f"refresh_{uid}"},
+            {"text": "𝐃𝐄𝐋𝐄𝐓𝐄", "style": "danger", "callback_data": f"delete_{uid}"},
         ]),
         make_styled_row([
-            {"text": "✅ 𝐃𝐎𝐍𝐄", "style": "success", "callback_data": f"done_{uid}"},
-            {"text": "📤 𝐅𝐎𝐑𝐖𝐀𝐑𝐃", "style": "primary", "callback_data": f"forward_{uid}"},
+            {"text": "𝐃𝐎𝐍𝐄", "style": "success", "callback_data": f"done_{uid}"},
+            {"text": "𝐅𝐎𝐑𝐖𝐀𝐑𝐃", "style": "primary", "callback_data": f"forward_{uid}"},
         ]),
     ]
     action_markup = InlineKeyboardMarkup(action_keyboard)
@@ -1137,14 +1101,12 @@ def handle_preview_actions(call):
         _send_pe(chat_id, text, reply_markup=kb)
 
     elif action == "forward":
-        # Broadcast the preview message (with its inline buttons) to all users
         preview_msg_id = data.get("preview_msg_id")
         if not preview_msg_id:
             bot.answer_callback_query(call.id, "No preview to forward!", show_alert=True)
             return
         bot.answer_callback_query(call.id, "📤 Broadcasting with buttons...")
 
-        # Build the user's custom inline keyboard (same as in create_preview)
         reply_markup = None
         if data.get("buttons"):
             keyboard = []
@@ -1221,9 +1183,9 @@ def handle_check_join(call):
     bot.answer_callback_query(call.id)
 
 # ============================================================
-# ADMIN COMMANDS
+# ADMIN COMMANDS - UPDATED WITH EMOJI SUPPORT
 # ============================================================
-@bot.message_handler(func=lambda m: m.text == "𝐁𝐎𝐓 𝐎𝐅𝐅" and is_admin(m.from_user.id))
+@bot.message_handler(func=lambda m: button_matches(m.text, "𝐁𝐎𝐓 𝐎𝐅𝐅") and is_admin(m.from_user.id))
 def bot_off(message):
     global bot_active
     bot_active = False
@@ -1236,7 +1198,7 @@ def bot_off(message):
 """
     _send_pe(message.chat.id, text, reply_markup=get_menu(message.from_user.id))
 
-@bot.message_handler(func=lambda m: m.text == "𝐁𝐎𝐓 𝐎𝐍" and is_admin(m.from_user.id))
+@bot.message_handler(func=lambda m: button_matches(m.text, "𝐁𝐎𝐓 𝐎𝐍") and is_admin(m.from_user.id))
 def bot_on(message):
     global bot_active
     bot_active = True
@@ -1249,7 +1211,7 @@ def bot_on(message):
 """
     _send_pe(message.chat.id, text, reply_markup=get_menu(message.from_user.id))
 
-@bot.message_handler(func=lambda m: m.text == "𝐔𝐒𝐄𝐑𝐒 𝐋𝐈𝐒𝐓" and is_admin(m.from_user.id))
+@bot.message_handler(func=lambda m: button_matches(m.text, "𝐔𝐒𝐄𝐑𝐒 𝐋𝐈𝐒𝐓") and is_admin(m.from_user.id))
 def users_list(message):
     total = len(all_users)
     user_list = list(all_users)
@@ -1269,7 +1231,7 @@ def users_list(message):
             batch_text = "\n".join([f"• {uid}" for uid in batch])
             bot.send_message(message.chat.id, batch_text)
 
-@bot.message_handler(func=lambda m: m.text == "𝐁𝐑𝐎𝐀𝐃𝐂𝐀𝐒𝐓" and is_admin(m.from_user.id))
+@bot.message_handler(func=lambda m: button_matches(m.text, "𝐁𝐑𝐎𝐀𝐃𝐂𝐀𝐒𝐓") and is_admin(m.from_user.id))
 def broadcast_start(message):
     text = f"""
 {PLACEHOLDER}═══《 📢 𝐁𝐑𝐎𝐀𝐃𝐂𝐀𝐒𝐓 》═══{PLACEHOLDER}
@@ -1338,16 +1300,16 @@ def demo_buttons(message):
 """
     keyboard = [
         [
-            make_button_with_icon(text="🔵 𝐏𝐑𝐈𝐌𝐀𝐑𝐘", style="primary", callback_data="demo_primary"),
-            make_button_with_icon(text="🔴 𝐃𝐀𝐍𝐆𝐄𝐑", style="danger", callback_data="demo_danger"),
+            make_button_with_icon(text="𝐏𝐑𝐈𝐌𝐀𝐑𝐘", style="primary", callback_data="demo_primary"),
+            make_button_with_icon(text="𝐃𝐀𝐍𝐆𝐄𝐑", style="danger", callback_data="demo_danger"),
         ],
         [
-            make_button_with_icon(text="🟢 𝐒𝐔𝐂𝐂𝐄𝐒𝐒", style="success", callback_data="demo_success"),
-            make_button_with_icon(text="⚪ 𝐃𝐄𝐅𝐀𝐔𝐋𝐓", callback_data="demo_default"),
+            make_button_with_icon(text="𝐒𝐔𝐂𝐂𝐄𝐒𝐒", style="success", callback_data="demo_success"),
+            make_button_with_icon(text="𝐃𝐄𝐅𝐀𝐔𝐋𝐓", callback_data="demo_default"),
         ],
         [
-            make_button_with_icon(text="🌐 Google", style="primary", url="https://google.com"),
-            make_button_with_icon(text="📺 YouTube", style="danger", url="https://youtube.com"),
+            make_button_with_icon(text="Google", style="primary", url="https://google.com"),
+            make_button_with_icon(text="YouTube", style="danger", url="https://youtube.com"),
         ],
     ]
     markup = InlineKeyboardMarkup(keyboard)
@@ -1381,10 +1343,10 @@ def fallback(message):
 
 𝐏𝐋𝐄𝐀𝐒𝐄 𝐂𝐇𝐎𝐎𝐒𝐄 𝐅𝐑𝐎𝐌 𝐓𝐇𝐄 𝐌𝐄𝐍𝐔:
 
-𝐌𝐀𝐊𝐄 𝐏𝐎𝐒𝐓
-𝐇𝐄𝐋𝐏
-𝐀𝐁𝐎𝐔𝐓 𝐁𝐎𝐓
-𝐒𝐓𝐀𝐓𝐒
+🌿 𝐌𝐀𝐊𝐄 𝐏𝐎𝐒𝐓
+🍂 𝐇𝐄𝐋𝐏
+🍀 𝐀𝐁𝐎𝐔𝐓 𝐁𝐎𝐓
+🪾 𝐒𝐓𝐀𝐓𝐒
 
 {PLACEHOLDER}═════════════════════{PLACEHOLDER}
 """
@@ -1401,11 +1363,9 @@ if __name__ == "__main__":
     print(f"🏳️ Country Flags: {len(FLAG_MAPPING)}")
     print(f"🎨 Smart Emoji Mapping: ENABLED")
     print(f"🎨 Button Color Selection: ENABLED")
-    print(f"📋 Menu: BOLD ONLY (No Emoji Icons)")
-    print(f"📋 User Buttons: NO AUTO EMOJI (Only user's text)")
-    print(f"📋 Bot Buttons: WITH Premium Emoji Icons")
+    print(f"📋 Menu: EMOJI BUTTONS ENABLED")
     print("=" * 60)
     
     bot.remove_webhook()
     time.sleep(1)
-    bot.infinity_polling(timeout=30, long_polling_timeout=15)
+    bot.infinity_polling(timeout=30, long_polling_timeout=15) I
