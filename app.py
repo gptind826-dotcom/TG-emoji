@@ -1368,4 +1368,4 @@ if __name__ == "__main__":
     
     bot.remove_webhook()
     time.sleep(1)
-    bot.infinity_polling(timeout=30, long_polling_timeout=15) I
+    bot.infinity_polling(timeout=30, long_polling_timeout=15)
